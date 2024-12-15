@@ -1,139 +1,151 @@
-use petgraph::graph::{Graph, NodeIndex};
-use petgraph::algo::dijkstra;
-use csv::ReaderBuilder;
-use std::collections::HashMap;
-use std::error::Error;
-use petgraph::visit::EdgeRef;
-use petgraph::Undirected;
+use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::visit::Bfs;
+use std::collections::{HashMap, VecDeque};
+use std::fs::File;
+use std::io::{self, BufRead};
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let train_file = "fashion-mnist_train.csv";
-    let test_file = "fashion-mnist_test.csv";
+/// Load the graph 
+fn load_graph(file_path: &str) -> DiGraph<(), ()> {
+    let mut graph = DiGraph::new();
+    let mut node_map = HashMap::new();
+    let file = File::open(file_path).expect("Cannot open file");
+    let reader = io::BufReader::new(file);
 
-    let train_data = read_csv(train_file)?;
-    let test_data = read_csv(test_file)?;
-
-    println!("Train Data: {:?}", train_data);
-    println!("Test Data: {:?}", test_data);
-
-    // Ensure the graph type is consistent (Undirected)
-    let mut graph1 = Graph::<&str, (), Undirected>::new_undirected();
-    let mut graph2 = Graph::<&str, f32, Undirected>::new_undirected();
-
-    // Add nodes and edges
-    let shirt1 = graph1.add_node("Shirt1");
-    let shirt2 = graph1.add_node("Shirt2");
-    let pants1 = graph1.add_node("Pants1");
-    graph1.add_edge(shirt1, shirt2, ());
-    graph1.add_edge(shirt1, pants1, ());
-
-    let shoe1 = graph2.add_node("Shoe1");
-    let shoe2 = graph2.add_node("Shoe2");
-    let shoe3 = graph2.add_node("Shoe3");
-    graph2.add_edge(shoe1, shoe2, 0.9);
-    graph2.add_edge(shoe1, shoe3, 0.8);
-
-    println!("\nGraph 1 - Category-Based Details:");
-    print_graph(&graph1);
-
-    println!("\nGraph 2 - Similarity-Based Details:");
-    print_graph(&graph2);
-
-    // Compute and print average distances
-    let avg_distance_graph1 = compute_avg_distance(&graph1, None); 
-    println!("\nGraph 1 Average Distance: {:.2}", avg_distance_graph1);
-
-    let avg_distance_graph2 = compute_avg_distance(&graph2, Some(|&weight| weight)); 
-    println!("\nGraph 2 Average Distance: {:.2}", avg_distance_graph2);
-
-    // Print node degrees
-    println!("\nGraph 1 Node Degrees:");
-    printer_node_degrees(&graph1);
-
-    println!("\nGraph 2 Node Degrees:");
-    printer_node_degrees(&graph2);
-
-    Ok(())
-}
-
-fn read_csv(file_path: &str) -> Result<Vec<HashMap<String, String>>, Box<dyn Error>> {
-    let mut reader = ReaderBuilder::new().from_path(file_path)?;
-    let headers = reader.headers()?.clone();
-    let mut data = Vec::new();
-
-    for result in reader.records() {
-        let record = result?;
-        let mut row = HashMap::new();
-        for (header, value) in headers.iter().zip(record.iter()) {
-            row.insert(header.to_string(), value.to_string());
+    for line in reader.lines() {
+        let line = line.expect("Cannot read line");
+        let nodes: Vec<usize> = line.split_whitespace()
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        
+        if nodes.len() == 2 {
+            let node1 = *node_map.entry(nodes[0]).or_insert_with(|| graph.add_node(()));
+            let node2 = *node_map.entry(nodes[1]).or_insert_with(|| graph.add_node(()));
+            graph.add_edge(node1, node2, ());
         }
-        data.push(row);
     }
 
-    Ok(data)
+    graph
 }
 
-fn compute_avg_distance<N, E, F>(graph: &Graph<N, E, Undirected>, weight_fn: Option<F>) -> f32
-where
-    N: std::fmt::Debug,
-    E: std::fmt::Debug,
-    F: Fn(&E) -> f32,
-{
-    if graph.node_count() == 0 {
-        println!("Graph is empty, skipping distance calculation.");
-        return 0.0;
+/// Compute all pairs shortest path lengths
+fn compute_all_pair_shortest_paths(graph: &DiGraph<(), ()>) -> HashMap<NodeIndex, HashMap<NodeIndex, usize>> {
+    let mut all_distances = HashMap::new();
+
+    for node in graph.node_indices() {
+        let mut node_distances = HashMap::new();
+        let mut queue = VecDeque::new();
+        queue.push_back(node);
+        node_distances.insert(node, 0); // Distance to itself is 0
+
+        while let Some(current) = queue.pop_front() {
+            let current_distance = node_distances[&current];
+
+            for neighbor in graph.neighbors(current) {
+                if !node_distances.contains_key(&neighbor) {
+                    node_distances.insert(neighbor, current_distance + 1);
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+
+        all_distances.insert(node, node_distances);
     }
 
-    let mut total_distance = 0.0;
-    let mut pair_count = 0;
+    all_distances
+}
 
-    let nodes: Vec<NodeIndex> = graph.node_indices().collect();
+/// Calculate the average distance between nodes
+fn average_distance(distances: &HashMap<NodeIndex, HashMap<NodeIndex, usize>>) -> f64 {
+    let mut total_distance = 0;
+    let mut num_pairs = 0;
 
-    for &start_node in &nodes {
-        let distances = match &weight_fn {
-            Some(f) => dijkstra(graph, start_node, None, |edge| f(edge.weight())),
-            None => dijkstra(graph, start_node, None, |_| 1.0),
-        };
-
-        for &end_node in &nodes {
-            if start_node != end_node {
-                if let Some(&distance) = distances.get(&end_node) {
-                    total_distance += distance;
-                    pair_count += 1;
-                }
+    for (_, targets) in distances {
+        for (_, &dist) in targets {
+            if dist > 0 { 
+                total_distance += dist;
+                num_pairs += 1;
             }
         }
     }
 
-    if pair_count == 0 {
-        0.0
+    if num_pairs == 0 {
+        0.0 // Avoid division by zero
     } else {
-        total_distance / pair_count as f32
+        total_distance as f64 / num_pairs as f64
     }
 }
 
-fn print_graph<N, E>(graph: &Graph<N, E, Undirected>)
-where
-    N: std::fmt::Debug,
-    E: std::fmt::Debug,
-{
-    for edge in graph.edge_references() {
-        println!(
-            "Edge from {:?} to {:?} with weight {:?}",
-            graph[edge.source()],
-            graph[edge.target()],
-            edge.weight()
-        );
-    }
+fn main() {
+    let file_path = "/Users/alliesmith/ds210/finalproject/twitter_combined.txt";
+    let graph = load_graph(file_path);
+    println!("Graph has {} nodes and {} edges", graph.node_count(), graph.edge_count());
+
+    let distances = compute_all_pair_shortest_paths(&graph);
+    let avg_distance = average_distance(&distances);
+    println!("Average distance: {}", avg_distance);
+
+    let file_path = "/Users/alliesmith/ds210/finalproject/facebook_combined.txt";
+    let graph = load_graph(file_path);
+    println!("Graph has {} nodes and {} edges", graph.node_count(), graph.edge_count());
+
+    let distances = compute_all_pair_shortest_paths(&graph);
+    let avg_distance = average_distance(&distances);
+    println!("Average distance: {}", avg_distance);
 }
 
-fn printer_node_degrees<N, E>(graph: &Graph<N, E, Undirected>)
-where
-    N: std::fmt::Debug,
-    E: std::fmt::Debug,
-{
-    for node in graph.node_indices() {
-        let degree = graph.edges(node).count();
-        println!("Node {:?} has degree {}", graph[node], degree);
+/// Tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_load_graph() {
+        let edge_list = "0 1\n1 2\n2 3\n3 0\n";
+        let file_path = "test_graph.txt";
+        std::fs::write(file_path, edge_list).expect("Failed to write test file");
+
+        let graph = load_graph(file_path);
+        std::fs::remove_file(file_path).expect("Failed to delete test file");
+
+        assert_eq!(graph.node_count(), 4, "Graph should have 4 nodes");
+        assert_eq!(graph.edge_count(), 4, "Graph should have 4 edges");
+    }
+
+    #[test]
+    fn test_compute_all_pair_shortest_paths() {
+        let mut graph = DiGraph::new();
+        let n0 = graph.add_node(());
+        let n1 = graph.add_node(());
+        let n2 = graph.add_node(());
+        let n3 = graph.add_node(());
+
+        graph.add_edge(n0, n1, ());
+        graph.add_edge(n1, n2, ());
+        graph.add_edge(n2, n3, ());
+        graph.add_edge(n3, n0, ());
+
+        let distances = compute_all_pair_shortest_paths(&graph);
+
+        assert_eq!(distances[&n0][&n2], 2, "Shortest path from n0 to n2 should be 2");
+        assert_eq!(distances[&n1][&n3], 2, "Shortest path from n1 to n3 should be 2");
+    }
+   
+    #[test]
+    fn test_average_distance() {
+        let mut graph = DiGraph::new();
+        let n0 = graph.add_node(());
+        let n1 = graph.add_node(());
+        let n2 = graph.add_node(());
+        let n3 = graph.add_node(());
+
+        graph.add_edge(n0, n1, ());
+        graph.add_edge(n1, n2, ());
+        graph.add_edge(n2, n3, ());
+        graph.add_edge(n3, n0, ());
+
+        let distances = compute_all_pair_shortest_paths(&graph);
+        let avg_distance = average_distance(&distances);
+
+        assert!((avg_distance - 1.5).abs() < 1e-6, "Average distance should be approximately 1.5");
     }
 }
