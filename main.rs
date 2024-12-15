@@ -36,5 +36,93 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("\nGraph 2 - Similarity-Based Details;");
     print_graph(&graph2);
 
-    println!
+    println!("\nGraph 1 - Category-Based Details;");
+    let avg_distance_graph1 = compute_avg_distance(&graph1, None);
+    println!("Average Distance: {:.2}", avg_distance_graph1);
+
+    println!("\nGraph 2 - Similarity-Based Details;");
+    let avg_distance_graph2 = compute_avg_distance(&graph2, None);
+    println!("Average Distance: {:.2}", avg_distance_graph2);
+
+    println!("n\Comparison");
+    println!("Graph 1 (Category-Based) Average Distance: {:.2}", avg_distance_graph1);
+    println!("Graph 2 (Similarity-Based) Average Distance: {:.2}", avg_distance_graph2);
     
+    println!("n\Graph 1 Node Degrees:");
+    print_node_degrees(&graph1);
+
+    println!("n\Graph 2 Node Degrees:");
+    print_node_degrees(&graph2);
+
+    Ok(())
+}
+
+fn read_csv(file_path: &str) -> Result<Vec<HashMap<String, String>>, Boxdyn Error>> {
+    let mut reader = ReaderBuilder::new().from_path(file_path)?;
+    let headers = reader.headers()?.clone();
+    let mut data = Vec::new();
+
+    for result in reader.records() {
+        let record = result?;
+        let mut row = HashMap::new();
+        for (header, value) in headers.iter().zip(record.iter()) {
+            row.insert(header.to_string(), value.string());
+        }
+        data.push(row);
+    }
+
+    Ok(data)
+}
+
+fn compute_avg_distance<N, E, F>(graph: &Graph<N, E>, weight_fn: Option<F>) -> f32
+where 
+    F: Fn(&E) -> f32, 
+{
+    let mut total_distance = 0.0;
+    let mut pair_count = 0;
+
+    let nodes: Vec<Nodeindex> = graph.node_indices().collect();
+
+    for &start_node in &nodes {
+        let distances = match &weight_fn {
+            Some(f) => dijkstras(graph, start_node, None, |_| 1.0), 
+        };
+
+        for &end_node in &nodes {
+            if start_node != end_node {
+                if let Some(&distance) = distances.get(&end_node) {
+                    total_distance += distance;
+                    pair_count += 1;
+                }
+            }
+        }
+    }
+
+    total_distance / pair_count as f32
+}
+
+fn print_graph <N, E>(graph: &Graph <N, E>)
+where
+    N: std::fmt::Debug,
+    E: std::fmt::Debug,
+{
+    println!("Graph:");
+    for edge in graph.edge_references() {
+        println!(
+            "Edge from {:?} to {:?} with weight {:?}",
+            graph[edge.source()],
+            graph[edge.source()],
+            edge.weight()
+        );
+    }
+}
+
+fn printer_node_degrees<N, E>(graph: &Graph<N, E>)
+where 
+    N: std::fmt::Debug, 
+{
+    for node in graph.node_indices() {
+        let degree = graph.edges(node).count();
+        println!("Node {:?} has degree {}", graph[node], degree);
+    }
+}
